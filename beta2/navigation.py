@@ -291,6 +291,96 @@ class FlightController:
             print(f"[NAV] Error sending RTL command: {e}")
             return False
     
+    def takeoff(self, altitude=1.5):
+        """
+        Command vehicle to take off to specified altitude.
+        
+        Args:
+            altitude: Target altitude in meters (default: 1.5m for indoor flight)
+        
+        Returns:
+            bool: True if takeoff command sent successfully
+        """
+        if not self.connected:
+            print("[NAV] Cannot takeoff: Flight controller not connected")
+            return False
+        
+        try:
+            # Ensure GUIDED mode
+            if not self.set_guided_mode():
+                print("[NAV] Warning: Could not set GUIDED mode for takeoff")
+            
+            # Arm the vehicle
+            print("[NAV] Arming vehicle for takeoff...")
+            self.connection.arducopter_arm()
+            
+            # Wait for arming confirmation
+            timeout = time.time() + 10
+            while time.time() < timeout:
+                self.update_vehicle_state()
+                if self.vehicle_state['armed']:
+                    print("[NAV] Vehicle armed successfully")
+                    break
+                time.sleep(0.1)
+            
+            if not self.vehicle_state['armed']:
+                print("[NAV] Warning: Vehicle may not be armed")
+            
+            # Send takeoff command
+            print(f"[NAV] Sending takeoff command to {altitude}m...")
+            self.connection.mav.command_long_send(
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+                0,  # confirmation
+                0,  # param1 (minimum pitch, not used for multicopter)
+                0,  # param2 (unused)
+                0,  # param3 (unused)
+                0,  # param4 (yaw angle, 0 = current heading)
+                0,  # param5 (latitude, not used)
+                0,  # param6 (longitude, not used)
+                altitude  # param7 (altitude in meters)
+            )
+            
+            print(f"[NAV] Takeoff command sent to {altitude}m")
+            return True
+            
+        except Exception as e:
+            print(f"[NAV] Error during takeoff: {e}")
+            return False
+    
+    def emergency_disarm(self):
+        """
+        Immediately disarm the vehicle (motor kill switch).
+        This cuts all power to motors for emergency stop.
+        
+        Returns:
+            bool: True if disarm command sent successfully
+        """
+        if not self.connected:
+            print("[NAV] Cannot disarm: Flight controller not connected")
+            return False
+        
+        try:
+            print("[NAV] EMERGENCY DISARM - Cutting all motor power!")
+            # Force disarm immediately
+            self.connection.arducopter_disarm()
+            # Also send disarm command with force flag
+            self.connection.mav.command_long_send(
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                0,  # confirmation
+                0,  # param1: 0 = disarm
+                21196,  # param2: force disarm (21196 = MAV_COMPONENT_ARM_DISARM_FORCE)
+                0, 0, 0, 0, 0, 0  # unused params
+            )
+            print("[NAV] Emergency disarm command sent - motors should be off")
+            return True
+        except Exception as e:
+            print(f"[NAV] Error during emergency disarm: {e}")
+            return False
+    
     def close(self):
         """Close connection to flight controller."""
         if self.connected:

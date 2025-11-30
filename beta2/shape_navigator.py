@@ -12,9 +12,11 @@ class ShapeNavigator:
     
     # Navigation states
     STATE_IDLE = "idle"
+    STATE_TAKEOFF = "takeoff"
     STATE_SEARCHING = "searching"
     STATE_APPROACHING = "approaching"
     STATE_REACHED = "reached"
+    STATE_FLYING_THROUGH = "flying_through"  # New state for gate navigation
     STATE_COMPLETE = "complete"
     STATE_ERROR = "error"
     
@@ -47,6 +49,10 @@ class ShapeNavigator:
         self.search_timeout = 30.0  # seconds to search for shape before timeout
         self.max_navigation_time = 300.0  # maximum total navigation time (5 minutes)
         
+        # Gate navigation parameters
+        self.gate_pass_duration = 2.0  # seconds to continue forward after reaching gate
+        self.gate_pass_velocity = 0.5  # m/s forward velocity when passing through gate
+        
         # Safety parameters
         self.emergency_stop = False
         self.navigation_start_time = None
@@ -58,6 +64,7 @@ class ShapeNavigator:
         self.search_start_time = None
         self.shape_reached_time = None
         self.reach_confirm_duration = 2.0  # seconds to confirm shape is reached
+        self.gate_pass_start_time = None  # Time when started flying through gate
         
         # Visual servoing gains
         self.kp_x = 0.5  # proportional gain for horizontal movement
@@ -92,7 +99,7 @@ class ShapeNavigator:
         self.shape_order = shape_order.copy()
         self.current_target_index = 0
         self.current_target_shape = self.shape_order[0]
-        self.state = self.STATE_SEARCHING
+        self.state = self.STATE_TAKEOFF  # Start with takeoff
         self.search_start_time = time.time()
         self.navigation_start_time = time.time()
         self.target_last_seen = None
@@ -100,12 +107,24 @@ class ShapeNavigator:
         self.consecutive_errors = 0
         
         print(f"[NAV] Navigation started. Target sequence: {' -> '.join(self.shape_order)}")
-        print(f"[NAV] Searching for first target: {self.current_target_shape}")
         
         # Ensure we're in GUIDED mode
         if self.fc.connected:
             if not self.fc.set_guided_mode():
                 print("[NAV] Warning: Could not set GUIDED mode")
+                return False
+            
+            # Start takeoff sequence
+            print("[NAV] Initiating automatic takeoff...")
+            if self.fc.takeoff(altitude=1.5):  # Takeoff to 1.5m for indoor flight
+                print("[NAV] Takeoff command sent, waiting for takeoff completion...")
+            else:
+                print("[NAV] Warning: Takeoff command failed")
+                return False
+        else:
+            # Simulation mode - skip takeoff
+            print("[NAV] Simulation mode: Skipping takeoff, starting search")
+            self.state = self.STATE_SEARCHING
         
         return True
     
@@ -140,6 +159,44 @@ class ShapeNavigator:
         
         if self.state == self.STATE_ERROR:
             return self.state
+        
+        # Handle takeoff state
+        if self.state == self.STATE_TAKEOFF:
+            if self.fc.connected:
+                # Check if we've reached takeoff altitude
+                self.fc.update_vehicle_state()
+                current_alt = self.fc.vehicle_state['position']['alt']
+                if current_alt >= 1.2:  # Reached at least 1.2m (close enough to 1.5m target)
+                    print(f"[NAV] Takeoff complete! Altitude: {current_alt:.2f}m")
+                    self.state = self.STATE_SEARCHING
+                    self.search_start_time = time.time()
+                    print(f"[NAV] Searching for first target: {self.current_target_shape}")
+                else:
+                    # Still taking off, hover in place
+                    self.fc.send_velocity_command(0, 0, 0)
+            else:
+                # Simulation mode - skip takeoff wait
+                self.state = self.STATE_SEARCHING
+                self.search_start_time = time.time()
+            return self.state
+        
+        # Handle gate flying through state
+        if self.state == self.STATE_FLYING_THROUGH:
+            if self.gate_pass_start_time is None:
+                self.gate_pass_start_time = time.time()
+            
+            # Continue forward through the gate
+            elapsed = time.time() - self.gate_pass_start_time
+            if elapsed < self.gate_pass_duration:
+                # Keep flying forward through gate
+                self.fc.send_velocity_command(self.gate_pass_velocity, 0, 0)
+                return self.state
+            else:
+                # Finished passing through gate, move to next shape
+                print(f"[NAV] Successfully flew through gate with shape: {self.current_target_shape}")
+                self.gate_pass_start_time = None
+                self.move_to_next_shape()
+                return self.state
         
         # Emergency stop check
         if self.emergency_stop:
@@ -189,13 +246,16 @@ class ShapeNavigator:
                     if self.state != self.STATE_REACHED:
                         self.state = self.STATE_REACHED
                         self.shape_reached_time = time.time()
-                        print(f"[NAV] Reached shape: {self.current_target_shape}")
+                        print(f"[NAV] Reached gate with shape: {self.current_target_shape}")
                         if self.current_distance:
-                            print(f"[NAV] Distance at shape: {self.current_distance:.2f}m")
+                            print(f"[NAV] Distance at gate: {self.current_distance:.2f}m")
                     
-                    # Confirm we're at the shape for a duration
+                    # Confirm we're at the gate for a duration, then fly through it
                     if time.time() - self.shape_reached_time >= self.reach_confirm_duration:
-                        self.move_to_next_shape()
+                        # Start flying through the gate
+                        self.state = self.STATE_FLYING_THROUGH
+                        self.gate_pass_start_time = None  # Will be set in next update
+                        print(f"[NAV] Flying through gate with shape: {self.current_target_shape}")
                     
                     # Hold position while confirming
                     self.fc.send_velocity_command(0, 0, 0)
@@ -395,13 +455,18 @@ class ShapeNavigator:
             self.fc.return_to_launch()
     
     def emergency_stop_navigation(self):
-        """Immediately stop navigation and execute safety procedure."""
-        print("[NAV] EMERGENCY STOP activated!")
+        """
+        Immediately stop navigation and execute safety procedure.
+        This is the motor kill switch - immediately disarms motors.
+        """
+        print("[NAV] EMERGENCY STOP (MOTOR KILL SWITCH) activated!")
         self.emergency_stop = True
         self.fc.send_velocity_command(0, 0, 0)
         
+        # Immediately disarm motors (kill switch)
         if self.fc.connected:
-            self.fc.return_to_launch()
+            self.fc.emergency_disarm()
+            print("[NAV] Motors disarmed - drone will fall into safety net")
     
     def reset(self):
         """Reset navigator to idle state."""
@@ -416,5 +481,6 @@ class ShapeNavigator:
         self.navigation_start_time = None
         self.emergency_stop = False
         self.consecutive_errors = 0
+        self.gate_pass_start_time = None
         print("[NAV] Navigator reset")
 

@@ -7,6 +7,7 @@ import sys
 from navigation import FlightController
 from shape_navigator import ShapeNavigator
 from tof_sensor import TOFSensor
+from remote_control import RemoteControl
 
 # Try to import picamera2 for Raspberry Pi camera
 try:
@@ -242,6 +243,29 @@ def run_video():
     fc = FlightController()
     navigator = ShapeNavigator(fc, camera_width=640, camera_height=480, tof_sensor=tof)
     
+    # Initialize remote control interface
+    remote_control = RemoteControl(port=8888)
+    
+    # Define callbacks that can access local variables
+    def emergency_stop_handler():
+        nonlocal navigation_active
+        navigator.emergency_stop_navigation()
+        navigation_active = False
+    
+    def status_request_handler():
+        return {
+            'navigation_active': navigation_active,
+            'order_complete': order_complete,
+            'shape_order': shape_order,
+            'nav_status': navigator.get_status() if navigation_active else None
+        }
+    
+    remote_control.set_emergency_stop_callback(emergency_stop_handler)
+    remote_control.set_status_request_callback(status_request_handler)
+    remote_control.start_server()
+    print("[INFO] Remote control server started on port 8888")
+    print("[INFO] Connect with: telnet <pi_ip> 8888 or use remote_control.py client")
+    
     # Try to connect to flight controller (Flywoo GOKU GN745 V3 AIO)
     # Connect Pi UART (GPIO 14/15) to any FC UART port configured for MAVLink
     fc_connected = False
@@ -332,14 +356,20 @@ def run_video():
             dist_text = f"Distance: {distance:.2f}m"
             cv2.putText(annotated, dist_text, (20, 120),
                         cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
-            
-            # Highlight target shape if detected
+        
+        # Highlight target shape if detected
+        if navigation_active:
+            nav_status = navigator.get_status()
             if nav_status['current_target'] in frame_labels:
                 if nav_status['current_target'] in shape_positions:
                     x, y, _ = shape_positions[nav_status['current_target']]
                     cv2.circle(annotated, (x, y), 30, (0, 255, 0), 3)
                     cv2.putText(annotated, "TARGET", (x - 30, y - 40),
                                 cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 0), 2)
+        
+        # Display remote control status
+        cv2.putText(annotated, "Remote: Port 8888", (20, annotated.shape[0] - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
 
         cv2.imshow("ShaperDrone - Video", annotated)
 
@@ -377,6 +407,7 @@ def run_video():
                 navigation_active = False
         
     # Cleanup
+    remote_control.stop_server()
     if fc_connected:
         fc.close()
     if use_picamera:
