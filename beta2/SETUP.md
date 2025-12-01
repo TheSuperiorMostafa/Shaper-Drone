@@ -28,11 +28,21 @@
 
 ### ToF Sensor Connection
 
-- Connect ToF sensor to Raspberry Pi I2C bus:
+- Connect ToF sensor (VL53L0X) to Raspberry Pi I2C bus:
   - VCC → Pi 3.3V
   - GND → Pi GND
   - SDA → Pi GPIO 2 (I2C SDA)
   - SCL → Pi GPIO 3 (I2C SCL)
+
+### Optical Flow Sensor Connection (MTF-02B)
+
+- Connect MTF-02B to Raspberry Pi I2C bus:
+  - VCC → Pi 3.3V (or 5V, check sensor specifications)
+  - GND → Pi GND
+  - SDA → Pi GPIO 2 (I2C SDA)
+  - SCL → Pi GPIO 3 (I2C SCL)
+- Default I2C address: 0x42
+- Note: Both ToF and Optical Flow sensors can share the same I2C bus
 
 ## ArduPilot Configuration
 
@@ -93,8 +103,9 @@ pip3 install VL53L0X
 # Or for VL53L1X
 pip3 install VL53L1X
 
-# For Optical Flow sensor (PMW3901)
-pip3 install pmw3901
+# For Optical Flow sensor
+# MTF-02B uses smbus (usually pre-installed, or install with: pip3 install smbus2)
+# For PMW3901: pip3 install pmw3901
 ```
 
 ### 3. Serial Port Permissions
@@ -127,8 +138,8 @@ tof = TOFSensor(sensor_type='VL53L0X')  # or 'VL53L1X'
 
 Edit `shapeVideo.py`, line ~242:
 ```python
-optical_flow = OpticalFlowSensor(sensor_type='PMW3901', interface='SPI', bus=0, device=0)
-# Change to 'PX4Flow' or 'simulated' as needed
+optical_flow = OpticalFlowSensor(sensor_type='MTF-02B', interface='I2C', bus=1, device=0x42)
+# MTF-02B is the default. Change to 'PMW3901', 'PX4Flow', or 'simulated' as needed
 ```
 
 ### 2. Adjust Navigation Parameters (Optional)
@@ -188,25 +199,31 @@ python3 shapeVideo.py
 3. Scan for device: `i2cdetect -y 1`
 4. Verify sensor library is installed
 
-### Optical Flow Sensor Not Detected
+### Optical Flow Sensor (MTF-02B) Not Detected
 
-1. **For PMW3901 (SPI):**
-   - Check SPI wiring (MOSI, MISO, SCLK, CS)
-   - Enable SPI in raspi-config
-   - Verify SPI is working: `lsmod | grep spi`
-   - Check sensor library: `pip3 list | grep pmw3901`
-   - Ensure correct bus and device numbers in code
+1. **Check I2C wiring:**
+   - Verify SDA and SCL connections
+   - Ensure proper power (3.3V or 5V depending on sensor)
+   - Check ground connection
 
-2. **For PX4Flow (I2C):**
-   - Check I2C wiring
+2. **Enable I2C:**
    - Enable I2C in raspi-config
-   - Scan for device: `i2cdetect -y 1`
-   - Verify I2C address (typically 0x42)
+   - Reboot if necessary
 
-3. **General:**
-   - Ensure sensor has good lighting and textured surface
-   - Optical flow requires surface texture to work properly
+3. **Verify sensor detection:**
+   - Scan for device: `i2cdetect -y 1`
+   - MTF-02B should appear at address 0x42
+   - If not detected, check wiring and power
+
+4. **Check sensor requirements:**
+   - Ensure sensor has good lighting
+   - Optical flow requires textured surface to work properly
    - Check sensor height (should be 0.5-4m for best results)
+   - Sensor should be pointing downward
+
+5. **For other sensors:**
+   - **PMW3901 (SPI):** Check SPI wiring, enable SPI, verify library installed
+   - **PX4Flow (I2C):** Similar to MTF-02B, check I2C address
 
 ### Navigation Issues
 

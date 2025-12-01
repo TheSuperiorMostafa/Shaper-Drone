@@ -9,15 +9,15 @@ import math
 class OpticalFlowSensor:
     """Interface for Optical Flow distance/velocity sensor."""
     
-    def __init__(self, sensor_type='PMW3901', interface='SPI', bus=0, device=0):
+    def __init__(self, sensor_type='MTF-02B', interface='I2C', bus=1, device=0x42):
         """
         Initialize Optical Flow sensor.
         
         Args:
-            sensor_type: Type of sensor ('PMW3901', 'PX4Flow', or 'simulated')
+            sensor_type: Type of sensor ('MTF-02B', 'PMW3901', 'PX4Flow', or 'simulated')
             interface: Communication interface ('SPI' or 'I2C')
-            bus: SPI bus number or I2C bus number (default: 0)
-            device: SPI device/CS number or I2C address (default: 0)
+            bus: SPI bus number or I2C bus number (default: 1 for Raspberry Pi)
+            device: SPI device/CS number or I2C address (default: 0x42 for MTF-02B)
         """
         self.sensor_type = sensor_type
         self.interface = interface
@@ -76,6 +76,28 @@ class OpticalFlowSensor:
                     self.connected = True
                 except Exception as e:
                     print(f"[OPTICAL_FLOW] Error initializing PMW3901: {e}")
+                    print("[OPTICAL_FLOW] Falling back to simulated mode")
+                    self.sensor_type = 'simulated'
+                    self.connected = True
+            
+            elif self.sensor_type == 'MTF-02B':
+                try:
+                    # MTF-02B uses I2C interface
+                    if self.interface == 'I2C':
+                        import smbus
+                        bus = smbus.SMBus(self.bus)
+                        # MTF-02B I2C address is typically 0x42
+                        address = self.device if self.device else 0x42
+                        self.sensor = {'bus': bus, 'address': address}
+                        self.connected = True
+                        print(f"[OPTICAL_FLOW] MTF-02B sensor initialized on I2C bus {self.bus}, address 0x{address:02x}")
+                    else:
+                        print("[OPTICAL_FLOW] MTF-02B only supports I2C interface")
+                        print("[OPTICAL_FLOW] Falling back to simulated mode")
+                        self.sensor_type = 'simulated'
+                        self.connected = True
+                except Exception as e:
+                    print(f"[OPTICAL_FLOW] Error initializing MTF-02B: {e}")
                     print("[OPTICAL_FLOW] Falling back to simulated mode")
                     self.sensor_type = 'simulated'
                     self.connected = True
@@ -148,6 +170,38 @@ class OpticalFlowSensor:
                 self.quality = random.randint(100, 255)
                 self.last_read_time = now
                 return (self.delta_x, self.delta_y, self.quality)
+            
+            elif self.sensor_type == 'MTF-02B':
+                # Read motion from MTF-02B via I2C
+                try:
+                    bus = self.sensor['bus']
+                    address = self.sensor['address']
+                    
+                    # MTF-02B register addresses (typical optical flow sensor registers)
+                    # Register 0x00: Motion register (delta X low byte)
+                    # Register 0x01: Motion register (delta X high byte)
+                    # Register 0x02: Motion register (delta Y low byte)
+                    # Register 0x03: Motion register (delta Y high byte)
+                    # Register 0x04: Quality register
+                    
+                    # Read delta X (16-bit signed)
+                    delta_x_low = bus.read_byte_data(address, 0x00)
+                    delta_x_high = bus.read_byte_data(address, 0x01)
+                    self.delta_x = self._twos_complement((delta_x_high << 8) | delta_x_low, 16)
+                    
+                    # Read delta Y (16-bit signed)
+                    delta_y_low = bus.read_byte_data(address, 0x02)
+                    delta_y_high = bus.read_byte_data(address, 0x03)
+                    self.delta_y = self._twos_complement((delta_y_high << 8) | delta_y_low, 16)
+                    
+                    # Read quality
+                    self.quality = bus.read_byte_data(address, 0x04)
+                    
+                    self.last_read_time = now
+                    return (self.delta_x, self.delta_y, self.quality)
+                except Exception as e:
+                    print(f"[OPTICAL_FLOW] Error reading MTF-02B: {e}")
+                    return None
             
             elif self.sensor_type == 'PMW3901':
                 # Read motion from PMW3901
@@ -241,12 +295,28 @@ class OpticalFlowSensor:
             return flow_data[2]  # quality
         return 0
     
+    def _twos_complement(self, value, bits):
+        """
+        Convert unsigned integer to signed integer using two's complement.
+        
+        Args:
+            value: Unsigned integer value
+            bits: Number of bits (e.g., 16 for 16-bit value)
+        
+        Returns:
+            int: Signed integer value
+        """
+        if value >= (1 << (bits - 1)):
+            value -= (1 << bits)
+        return value
+    
     def close(self):
         """Close sensor connection."""
         if self.sensor and self.sensor_type != 'simulated':
             try:
                 if self.sensor_type == 'PMW3901' and hasattr(self.sensor, 'close'):
                     self.sensor.close()
+                # MTF-02B and PX4Flow use smbus which doesn't need explicit close
             except:
                 pass
         self.connected = False

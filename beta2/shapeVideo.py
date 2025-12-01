@@ -240,11 +240,12 @@ def run_video():
     if not tof.is_connected():
         print("[INFO] ToF sensor not connected, distance estimation will be less accurate")
 
-    # Initialize Optical Flow sensor
-    optical_flow = OpticalFlowSensor(sensor_type='PMW3901', interface='SPI', bus=0, device=0)
-    # Change to 'PX4Flow' or 'simulated' as needed
+    # Initialize Optical Flow sensor (MTF-02B)
+    optical_flow = OpticalFlowSensor(sensor_type='MTF-02B', interface='I2C', bus=1, device=0x42)
+    # MTF-02B uses I2C, default address is 0x42
+    # Change to 'PMW3901', 'PX4Flow', or 'simulated' as needed
     if not optical_flow.is_connected():
-        print("[INFO] Optical Flow sensor not connected, position hold will be less accurate")
+        print("[INFO] Optical Flow sensor (MTF-02B) not connected, position hold will be less accurate")
 
     # Initialize flight controller and navigator
     fc = FlightController()
