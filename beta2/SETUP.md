@@ -26,13 +26,29 @@
 
 - Connect Raspberry Pi Camera Module to Pi's camera connector (CSI)
 
-### ToF Sensor Connection
+### ToF Sensor Connections
 
+**Forward-Facing ToF Sensor (for distance to shapes/gates):**
 - Connect ToF sensor (VL53L0X) to Raspberry Pi I2C bus:
   - VCC → Pi 3.3V
   - GND → Pi GND
   - SDA → Pi GPIO 2 (I2C SDA)
   - SCL → Pi GPIO 3 (I2C SCL)
+- Mount: Point forward, toward shapes/gates
+- Purpose: Measures horizontal distance to shapes/gates
+
+**Downward-Facing ToF Sensor (for altitude):**
+- Connect second ToF sensor (VL53L0X) to Raspberry Pi I2C bus:
+  - VCC → Pi 3.3V
+  - GND → Pi GND
+  - SDA → Pi GPIO 2 (I2C SDA) - can share same bus
+  - SCL → Pi GPIO 3 (I2C SCL) - can share same bus
+- **Important:** If using two VL53L0X sensors, you need to change one's I2C address
+  - Default VL53L0X address: 0x29
+  - Change one sensor's address to 0x30 (or another available address)
+  - Or use one VL53L0X and one VL53L1X (they have different default addresses)
+- Mount: Point downward, toward ground
+- Purpose: Measures altitude (height above ground)
 
 ### Optical Flow Sensor Connection (MTF-02B)
 
@@ -131,9 +147,15 @@ python3 -c "from pymavlink import mavutil; conn = mavutil.mavlink_connection('/d
 
 ### 1. Configure Sensor Types
 
-Edit `shapeVideo.py`, line ~237:
+Edit `shapeVideo.py`, line ~237-248:
 ```python
-tof = TOFSensor(sensor_type='VL53L0X')  # or 'VL53L1X'
+# Forward-facing ToF for distance to shapes/gates
+tof_forward = TOFSensor(sensor_type='VL53L0X', i2c_bus=1, address=None)
+
+# Downward-facing ToF for altitude
+tof_altitude = TOFSensor(sensor_type='VL53L0X', i2c_bus=1, address=None)
+# Note: If both are VL53L0X, configure different I2C addresses
+# Or use one VL53L0X and one VL53L1X
 ```
 
 Edit `shapeVideo.py`, line ~242:

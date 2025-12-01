@@ -235,10 +235,20 @@ def run_video():
             sys.exit(1)
         print("[INFO] Using USB camera (OpenCV VideoCapture)")
 
-    # Initialize ToF sensor
-    tof = TOFSensor(sensor_type='VL53L0X')  # Change to 'VL53L1X' or 'simulated' as needed
-    if not tof.is_connected():
-        print("[INFO] ToF sensor not connected, distance estimation will be less accurate")
+    # Initialize ToF sensors
+    # Forward-facing ToF for distance to shapes/gates
+    tof_forward = TOFSensor(sensor_type='VL53L0X', i2c_bus=1, address=None)
+    # Change to 'VL53L1X' or 'simulated' as needed
+    # Note: If using two VL53L0X sensors, you may need to change one's I2C address
+    if not tof_forward.is_connected():
+        print("[INFO] Forward ToF sensor not connected, distance estimation will be less accurate")
+    
+    # Downward-facing ToF for altitude measurement
+    tof_altitude = TOFSensor(sensor_type='VL53L0X', i2c_bus=1, address=None)
+    # Note: If both sensors are VL53L0X, you'll need to configure different I2C addresses
+    # or use different I2C buses, or use one VL53L0X and one VL53L1X
+    if not tof_altitude.is_connected():
+        print("[INFO] Altitude ToF sensor not connected, altitude control will be less accurate")
 
     # Initialize Optical Flow sensor (MTF-02B)
     optical_flow = OpticalFlowSensor(sensor_type='MTF-02B', interface='I2C', bus=1, device=0x42)
@@ -250,7 +260,8 @@ def run_video():
     # Initialize flight controller and navigator
     fc = FlightController()
     navigator = ShapeNavigator(fc, camera_width=640, camera_height=480, 
-                               tof_sensor=tof, optical_flow_sensor=optical_flow)
+                               tof_sensor=tof_forward, tof_altitude_sensor=tof_altitude,
+                               optical_flow_sensor=optical_flow)
     
     # Initialize remote control interface
     remote_control = RemoteControl(port=8888)
@@ -313,12 +324,13 @@ def run_video():
                 print("Error: could not read frame from camera.")
                 break
 
-        # Read ToF sensor distance
-        distance = tof.read_distance()
+        # Read ToF sensors
+        forward_distance = tof_forward.read_distance()  # Distance to shapes/gates (forward)
+        altitude = tof_altitude.read_distance()  # Altitude above ground (downward)
         
         # Update optical flow sensor height (for velocity calculation)
-        if distance is not None:
-            optical_flow.set_height(distance)
+        if altitude is not None:
+            optical_flow.set_height(altitude)
         
         # Read optical flow data
         flow_velocity = optical_flow.get_velocity()
@@ -342,7 +354,8 @@ def run_video():
 
         # Navigation phase: Update navigation based on detections
         if navigation_active:
-            navigator.update_navigation(frame_labels, shape_positions, distance,
+            navigator.update_navigation(frame_labels, shape_positions, 
+                                       distance=forward_distance, altitude=altitude,
                                        flow_velocity=flow_velocity, flow_position=flow_position)
             nav_status = navigator.get_status()
             
@@ -370,19 +383,25 @@ def run_video():
             cv2.putText(annotated, status_text, (20, 90),
                         cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 0, 0), 2)
         
-        # Display ToF distance
-        if distance is not None:
-            dist_text = f"Distance: {distance:.2f}m"
+        # Display ToF sensor readings
+        if forward_distance is not None:
+            dist_text = f"Forward Distance: {forward_distance:.2f}m"
             cv2.putText(annotated, dist_text, (20, 120),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
+        
+        if altitude is not None:
+            alt_text = f"Altitude: {altitude:.2f}m"
+            cv2.putText(annotated, alt_text, (20, 140),
                         cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
         
         # Display Optical Flow data
         if optical_flow.is_connected():
+            y_offset = 160 if altitude is not None else 140
             flow_text = f"Flow: V({flow_velocity[0]:.2f}, {flow_velocity[1]:.2f}) m/s | Q:{flow_quality}"
-            cv2.putText(annotated, flow_text, (20, 150),
+            cv2.putText(annotated, flow_text, (20, y_offset),
                         cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 1)
             pos_text = f"Position: ({flow_position[0]:.2f}, {flow_position[1]:.2f}) m"
-            cv2.putText(annotated, pos_text, (20, 170),
+            cv2.putText(annotated, pos_text, (20, y_offset + 20),
                         cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 1)
         
         # Highlight target shape if detected
@@ -443,7 +462,8 @@ def run_video():
         camera.close()
     else:
         camera.release()
-    tof.close()
+    tof_forward.close()
+    tof_altitude.close()
     optical_flow.close()
     cv2.destroyAllWindows()
     

@@ -21,7 +21,7 @@ class ShapeNavigator:
     STATE_ERROR = "error"
     
     def __init__(self, flight_controller, camera_width=640, camera_height=480, 
-                 tof_sensor=None, optical_flow_sensor=None):
+                 tof_sensor=None, tof_altitude_sensor=None, optical_flow_sensor=None):
         """
         Initialize shape navigator.
         
@@ -29,11 +29,13 @@ class ShapeNavigator:
             flight_controller: FlightController instance
             camera_width: Camera frame width in pixels
             camera_height: Camera frame height in pixels
-            tof_sensor: TOFSensor instance for distance measurements (optional)
+            tof_sensor: TOFSensor instance for forward distance to shapes/gates (optional)
+            tof_altitude_sensor: TOFSensor instance for altitude (pointing down) (optional)
             optical_flow_sensor: OpticalFlowSensor instance for position/velocity (optional)
         """
         self.fc = flight_controller
-        self.tof = tof_sensor
+        self.tof = tof_sensor  # Forward-facing ToF for distance to shapes
+        self.tof_altitude = tof_altitude_sensor  # Downward-facing ToF for altitude
         self.optical_flow = optical_flow_sensor
         self.camera_width = camera_width
         self.camera_height = camera_height
@@ -78,10 +80,14 @@ class ShapeNavigator:
         self.target_shape_size = None
         self.reference_shape_size = 1000  # pixels - reference size at approach_distance
         
-        # ToF distance tracking
-        self.current_distance = None
+        # ToF distance tracking (forward-facing for shapes/gates)
+        self.current_distance = None  # Distance to shapes/gates (forward)
         self.distance_history = []  # For filtering noisy readings
         self.distance_history_size = 5
+        
+        # ToF altitude tracking (downward-facing for height)
+        self.current_altitude = None  # Altitude above ground
+        self.altitude_history = []  # For filtering altitude readings
         
         # Optical flow tracking
         self.flow_velocity = (0.0, 0.0)  # (vx, vy) in m/s
@@ -137,21 +143,22 @@ class ShapeNavigator:
         return True
     
     def update_navigation(self, detected_shapes, shape_positions, distance=None, 
-                         flow_velocity=None, flow_position=None):
+                         altitude=None, flow_velocity=None, flow_position=None):
         """
         Update navigation based on current frame detection.
         
         Args:
             detected_shapes: List of shape labels detected in current frame
             shape_positions: Dict mapping shape labels to (x, y, area) tuples
-            distance: Current distance from ToF sensor in meters (optional)
+            distance: Current forward distance from ToF sensor to shapes/gates in meters (optional)
+            altitude: Current altitude from downward ToF sensor in meters (optional)
             flow_velocity: Optical flow velocity (vx, vy) in m/s (optional)
             flow_position: Optical flow position (x, y) in meters (optional)
         
         Returns:
             str: Current navigation state
         """
-        # Update distance from ToF sensor
+        # Update forward distance from ToF sensor (to shapes/gates)
         if distance is not None:
             self.current_distance = distance
             # Add to history for filtering
@@ -159,12 +166,26 @@ class ShapeNavigator:
             if len(self.distance_history) > self.distance_history_size:
                 self.distance_history.pop(0)
         elif self.tof and self.tof.is_connected():
-            # Try to read from ToF sensor if not provided
+            # Try to read from forward-facing ToF sensor if not provided
             self.current_distance = self.tof.read_distance()
             if self.current_distance:
                 self.distance_history.append(self.current_distance)
                 if len(self.distance_history) > self.distance_history_size:
                     self.distance_history.pop(0)
+        
+        # Update altitude from downward-facing ToF sensor
+        if altitude is not None:
+            self.current_altitude = altitude
+            self.altitude_history.append(altitude)
+            if len(self.altitude_history) > self.distance_history_size:
+                self.altitude_history.pop(0)
+        elif self.tof_altitude and self.tof_altitude.is_connected():
+            # Read from altitude ToF sensor
+            self.current_altitude = self.tof_altitude.read_distance()
+            if self.current_altitude:
+                self.altitude_history.append(self.current_altitude)
+                if len(self.altitude_history) > self.distance_history_size:
+                    self.altitude_history.pop(0)
         
         # Update optical flow data
         if flow_velocity is not None:
@@ -270,7 +291,9 @@ class ShapeNavigator:
                         self.shape_reached_time = time.time()
                         print(f"[NAV] Reached gate with shape: {self.current_target_shape}")
                         if self.current_distance:
-                            print(f"[NAV] Distance at gate: {self.current_distance:.2f}m")
+                            print(f"[NAV] Forward distance at gate: {self.current_distance:.2f}m")
+                        if self.current_altitude:
+                            print(f"[NAV] Altitude: {self.current_altitude:.2f}m")
                     
                     # Confirm we're at the gate for a duration, then fly through it
                     if time.time() - self.shape_reached_time >= self.reach_confirm_duration:
@@ -344,12 +367,12 @@ class ShapeNavigator:
         vx = self.kp_y * norm_dy * self.max_velocity  # forward/back
         vy = self.kp_x * norm_dx * self.max_velocity  # left/right
         
-        # Use ToF sensor distance if available (more accurate than shape size estimation)
+        # Use forward-facing ToF sensor distance if available (more accurate than shape size estimation)
         if self.current_distance is not None and len(self.distance_history) > 0:
             # Use median of recent readings for stability
             filtered_distance = sorted(self.distance_history)[len(self.distance_history) // 2]
             
-            # Distance-based forward/back control
+            # Distance-based forward/back control (distance to shapes/gates)
             distance_error = filtered_distance - self.approach_distance
             
             if distance_error < -0.3:  # Too close (more than 30cm closer than target)
@@ -392,7 +415,7 @@ class ShapeNavigator:
     def is_shape_reached(self, shape_area):
         """
         Check if shape is close enough to be considered "reached".
-        Uses ToF sensor distance if available for accurate detection.
+        Uses forward-facing ToF sensor distance if available for accurate detection.
         
         Args:
             shape_area: Area of shape in pixels
@@ -400,7 +423,7 @@ class ShapeNavigator:
         Returns:
             bool: True if shape is reached
         """
-        # Use ToF sensor distance if available (most accurate)
+        # Use forward-facing ToF sensor distance if available (most accurate)
         if self.current_distance is not None:
             # Consider reached if within 30cm of target distance
             distance_tolerance = 0.3
@@ -513,6 +536,10 @@ class ShapeNavigator:
         self.gate_pass_start_time = None
         self.flow_velocity = (0.0, 0.0)
         self.flow_position = (0.0, 0.0)
+        self.current_distance = None
+        self.current_altitude = None
+        self.distance_history = []
+        self.altitude_history = []
         # Reset optical flow position if available
         if self.optical_flow and self.optical_flow.is_connected():
             self.optical_flow.reset_position()
