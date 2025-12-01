@@ -20,7 +20,8 @@ class ShapeNavigator:
     STATE_COMPLETE = "complete"
     STATE_ERROR = "error"
     
-    def __init__(self, flight_controller, camera_width=640, camera_height=480, tof_sensor=None):
+    def __init__(self, flight_controller, camera_width=640, camera_height=480, 
+                 tof_sensor=None, optical_flow_sensor=None):
         """
         Initialize shape navigator.
         
@@ -29,9 +30,11 @@ class ShapeNavigator:
             camera_width: Camera frame width in pixels
             camera_height: Camera frame height in pixels
             tof_sensor: TOFSensor instance for distance measurements (optional)
+            optical_flow_sensor: OpticalFlowSensor instance for position/velocity (optional)
         """
         self.fc = flight_controller
         self.tof = tof_sensor
+        self.optical_flow = optical_flow_sensor
         self.camera_width = camera_width
         self.camera_height = camera_height
         self.camera_center_x = camera_width / 2.0
@@ -79,6 +82,11 @@ class ShapeNavigator:
         self.current_distance = None
         self.distance_history = []  # For filtering noisy readings
         self.distance_history_size = 5
+        
+        # Optical flow tracking
+        self.flow_velocity = (0.0, 0.0)  # (vx, vy) in m/s
+        self.flow_position = (0.0, 0.0)  # (x, y) in meters
+        self.use_optical_flow = False  # Enable optical flow for position hold
         
     def start_navigation(self, shape_order):
         """
@@ -128,7 +136,8 @@ class ShapeNavigator:
         
         return True
     
-    def update_navigation(self, detected_shapes, shape_positions, distance=None):
+    def update_navigation(self, detected_shapes, shape_positions, distance=None, 
+                         flow_velocity=None, flow_position=None):
         """
         Update navigation based on current frame detection.
         
@@ -136,6 +145,8 @@ class ShapeNavigator:
             detected_shapes: List of shape labels detected in current frame
             shape_positions: Dict mapping shape labels to (x, y, area) tuples
             distance: Current distance from ToF sensor in meters (optional)
+            flow_velocity: Optical flow velocity (vx, vy) in m/s (optional)
+            flow_position: Optical flow position (x, y) in meters (optional)
         
         Returns:
             str: Current navigation state
@@ -154,6 +165,17 @@ class ShapeNavigator:
                 self.distance_history.append(self.current_distance)
                 if len(self.distance_history) > self.distance_history_size:
                     self.distance_history.pop(0)
+        
+        # Update optical flow data
+        if flow_velocity is not None:
+            self.flow_velocity = flow_velocity
+        elif self.optical_flow and self.optical_flow.is_connected():
+            self.flow_velocity = self.optical_flow.get_velocity()
+        
+        if flow_position is not None:
+            self.flow_position = flow_position
+        elif self.optical_flow and self.optical_flow.is_connected():
+            self.flow_position = self.optical_flow.get_position()
         if self.state == self.STATE_IDLE or self.state == self.STATE_COMPLETE:
             return self.state
         
@@ -285,8 +307,15 @@ class ShapeNavigator:
                     self.fc.send_velocity_command(0, 0, 0)  # Stop
                     print(f"[NAV] Lost sight of target, searching...")
             elif self.state == self.STATE_SEARCHING:
-                # Search pattern: slow rotation or hover
-                self.fc.send_velocity_command(0, 0, 0)  # Hover in place
+                # Search pattern: use optical flow for position hold if available
+                if self.optical_flow and self.optical_flow.is_connected() and self.use_optical_flow:
+                    # Use optical flow to maintain position while searching
+                    # Counteract any drift
+                    vx = -0.3 * self.flow_velocity[0]  # Counteract forward drift
+                    vy = -0.3 * self.flow_velocity[1]  # Counteract sideways drift
+                    self.fc.send_velocity_command(vx, vy, 0)
+                else:
+                    self.fc.send_velocity_command(0, 0, 0)  # Hover in place
         
         return self.state
     
@@ -482,5 +511,10 @@ class ShapeNavigator:
         self.emergency_stop = False
         self.consecutive_errors = 0
         self.gate_pass_start_time = None
+        self.flow_velocity = (0.0, 0.0)
+        self.flow_position = (0.0, 0.0)
+        # Reset optical flow position if available
+        if self.optical_flow and self.optical_flow.is_connected():
+            self.optical_flow.reset_position()
         print("[NAV] Navigator reset")
 

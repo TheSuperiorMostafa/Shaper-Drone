@@ -7,6 +7,7 @@ import sys
 from navigation import FlightController
 from shape_navigator import ShapeNavigator
 from tof_sensor import TOFSensor
+from optical_flow import OpticalFlowSensor
 from remote_control import RemoteControl
 
 # Try to import picamera2 for Raspberry Pi camera
@@ -239,9 +240,16 @@ def run_video():
     if not tof.is_connected():
         print("[INFO] ToF sensor not connected, distance estimation will be less accurate")
 
+    # Initialize Optical Flow sensor
+    optical_flow = OpticalFlowSensor(sensor_type='PMW3901', interface='SPI', bus=0, device=0)
+    # Change to 'PX4Flow' or 'simulated' as needed
+    if not optical_flow.is_connected():
+        print("[INFO] Optical Flow sensor not connected, position hold will be less accurate")
+
     # Initialize flight controller and navigator
     fc = FlightController()
-    navigator = ShapeNavigator(fc, camera_width=640, camera_height=480, tof_sensor=tof)
+    navigator = ShapeNavigator(fc, camera_width=640, camera_height=480, 
+                               tof_sensor=tof, optical_flow_sensor=optical_flow)
     
     # Initialize remote control interface
     remote_control = RemoteControl(port=8888)
@@ -307,6 +315,15 @@ def run_video():
         # Read ToF sensor distance
         distance = tof.read_distance()
         
+        # Update optical flow sensor height (for velocity calculation)
+        if distance is not None:
+            optical_flow.set_height(distance)
+        
+        # Read optical flow data
+        flow_velocity = optical_flow.get_velocity()
+        flow_position = optical_flow.get_position()
+        flow_quality = optical_flow.get_quality()
+        
         annotated, frame_labels, shape_positions = process_frame(frame)
 
         # Learning phase: Update global shape order based on this frame
@@ -324,7 +341,8 @@ def run_video():
 
         # Navigation phase: Update navigation based on detections
         if navigation_active:
-            navigator.update_navigation(frame_labels, shape_positions, distance)
+            navigator.update_navigation(frame_labels, shape_positions, distance,
+                                       flow_velocity=flow_velocity, flow_position=flow_position)
             nav_status = navigator.get_status()
             
             # Check if navigation is complete or errored
@@ -356,6 +374,15 @@ def run_video():
             dist_text = f"Distance: {distance:.2f}m"
             cv2.putText(annotated, dist_text, (20, 120),
                         cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Display Optical Flow data
+        if optical_flow.is_connected():
+            flow_text = f"Flow: V({flow_velocity[0]:.2f}, {flow_velocity[1]:.2f}) m/s | Q:{flow_quality}"
+            cv2.putText(annotated, flow_text, (20, 150),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 1)
+            pos_text = f"Position: ({flow_position[0]:.2f}, {flow_position[1]:.2f}) m"
+            cv2.putText(annotated, pos_text, (20, 170),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 1)
         
         # Highlight target shape if detected
         if navigation_active:
@@ -416,6 +443,7 @@ def run_video():
     else:
         camera.release()
     tof.close()
+    optical_flow.close()
     cv2.destroyAllWindows()
     
 

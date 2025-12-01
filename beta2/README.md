@@ -7,7 +7,9 @@ Autonomous navigation system for a sub-250g drone that learns a sequence of shap
 - **Flight Controller:** Flywoo GOKU GN745 V3 AIO (ArduPilot firmware)
 - **Computer:** Raspberry Pi Zero 2 W
 - **Camera:** Raspberry Pi Camera Module
-- **Sensor:** Time-of-Flight (ToF) sensor (VL53L0X or VL53L1X)
+- **Sensors:** 
+  - Time-of-Flight (ToF) sensor (VL53L0X or VL53L1X) for distance measurement
+  - Optical Flow sensor (PMW3901, PX4Flow, or similar) for position/velocity estimation
 
 ## Features
 
@@ -17,6 +19,8 @@ Autonomous navigation system for a sub-250g drone that learns a sequence of shap
 - **Navigation Phase:** Autonomously navigates through gates in learned order
 - **Visual Servoing:** Uses camera feedback for precise navigation
 - **Distance Control:** ToF sensor provides accurate distance measurements
+- **Position Hold:** Optical flow sensor enables stable hovering and position hold
+- **Velocity Estimation:** Optical flow provides velocity feedback for improved control
 - **Motor Kill Switch:** Emergency stop immediately disarms motors (safety requirement)
 - **Remote Manual Override:** Network interface for external emergency stop and control
 - **Safety Features:** Timeouts, error recovery, automatic RTL
@@ -29,11 +33,13 @@ See [SETUP.md](SETUP.md) for complete hardware and software setup instructions.
 
 ```bash
 # Install dependencies
-pip3 install opencv-python numpy pymavlink picamera2 VL53L0X
+pip3 install opencv-python numpy pymavlink picamera2 VL53L0X pmw3901
 
 # Run the system
 python3 shapeVideo.py
 ```
+
+Note: For optical flow sensor, install `pmw3901` for PMW3901 sensor or configure for your specific sensor type.
 
 ## Controls
 
@@ -57,6 +63,7 @@ The remote emergency stop immediately disarms motors (motor kill switch) for saf
 - `navigation.py` - MAVLink flight controller communication (includes takeoff, emergency disarm)
 - `shape_navigator.py` - Navigation state machine with gate navigation and visual servoing
 - `tof_sensor.py` - Time-of-flight sensor interface
+- `optical_flow.py` - Optical flow sensor interface for position/velocity estimation
 - `remote_control.py` - Remote control server for manual override and emergency stop
 - `remote_client.py` - Client script for remote control commands
 - `SETUP.md` - Complete setup guide

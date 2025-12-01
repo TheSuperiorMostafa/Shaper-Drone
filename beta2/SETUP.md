@@ -92,6 +92,9 @@ pip3 install VL53L0X
 
 # Or for VL53L1X
 pip3 install VL53L1X
+
+# For Optical Flow sensor (PMW3901)
+pip3 install pmw3901
 ```
 
 ### 3. Serial Port Permissions
@@ -115,11 +118,17 @@ python3 -c "from pymavlink import mavutil; conn = mavutil.mavlink_connection('/d
 
 ## Software Configuration
 
-### 1. Configure ToF Sensor Type
+### 1. Configure Sensor Types
 
-Edit `shapeVideo.py`, line ~210:
+Edit `shapeVideo.py`, line ~237:
 ```python
 tof = TOFSensor(sensor_type='VL53L0X')  # or 'VL53L1X'
+```
+
+Edit `shapeVideo.py`, line ~242:
+```python
+optical_flow = OpticalFlowSensor(sensor_type='PMW3901', interface='SPI', bus=0, device=0)
+# Change to 'PX4Flow' or 'simulated' as needed
 ```
 
 ### 2. Adjust Navigation Parameters (Optional)
@@ -178,6 +187,26 @@ python3 shapeVideo.py
 2. Enable I2C in raspi-config
 3. Scan for device: `i2cdetect -y 1`
 4. Verify sensor library is installed
+
+### Optical Flow Sensor Not Detected
+
+1. **For PMW3901 (SPI):**
+   - Check SPI wiring (MOSI, MISO, SCLK, CS)
+   - Enable SPI in raspi-config
+   - Verify SPI is working: `lsmod | grep spi`
+   - Check sensor library: `pip3 list | grep pmw3901`
+   - Ensure correct bus and device numbers in code
+
+2. **For PX4Flow (I2C):**
+   - Check I2C wiring
+   - Enable I2C in raspi-config
+   - Scan for device: `i2cdetect -y 1`
+   - Verify I2C address (typically 0x42)
+
+3. **General:**
+   - Ensure sensor has good lighting and textured surface
+   - Optical flow requires surface texture to work properly
+   - Check sensor height (should be 0.5-4m for best results)
 
 ### Navigation Issues
 
