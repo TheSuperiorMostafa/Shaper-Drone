@@ -13,7 +13,7 @@ You will also need Python 3 and the [pymavlink](https://pypi.org/project/pymavli
 This script uses TCP on port 5764 to communicate with Mission Planner's SITL instance, so you will need to set up Mavlink mirroring before starting the simulator in Mission Planner. See the image below. 
 **Note, you will need to click the go/started button here every time you restart mission planner**, otherwise the Python script will be unable to connect.
 
-<img src="Mavlink_Mirror_setup.PNG" width="100%">
+<img src="Mavlink_Mirror_setup.gif" width="100%">
 
 After this, click on the Simulation tab at the top of the window, and then click the multirotor button at the bottom. The simulation should start.
 

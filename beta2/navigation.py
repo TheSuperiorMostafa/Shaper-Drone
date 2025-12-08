@@ -35,7 +35,7 @@ class FlightController:
         self.connection = None
         self.connected = False
         self.vehicle_state = {
-            'position': {'lat': 0, 'lon': 0, 'alt': 0},
+            'position': {'x': 0, 'y': 0, 'z': 0},
             'velocity': {'vx': 0, 'vy': 0, 'vz': 0},
             'heading': 0,
             'armed': False,
@@ -98,14 +98,14 @@ class FlightController:
         
         try:
             # Process any pending messages
-            msg = self.connection.recv_match(type=['GLOBAL_POSITION_INT', 'ATTITUDE', 'HEARTBEAT'], 
+            msg = self.connection.recv_match(type=['LOCAL_POSITION_NED', 'ATTITUDE', 'HEARTBEAT'], 
                                             blocking=False, timeout=0.1)
             
             if msg:
-                if msg.get_type() == 'GLOBAL_POSITION_INT':
-                    self.vehicle_state['position']['lat'] = msg.lat / 1e7
-                    self.vehicle_state['position']['lon'] = msg.lon / 1e7
-                    self.vehicle_state['position']['alt'] = msg.relative_alt / 1000.0  # mm to meters
+                if msg.get_type() == 'LOCAL_POSITION_NED': # position relative to the EKF origin
+                    self.vehicle_state['position']['x'] = msg.x # in m
+                    self.vehicle_state['position']['y'] = msg.y # in m
+                    self.vehicle_state['position']['z'] = msg.z # in m
                 
                 elif msg.get_type() == 'ATTITUDE':
                     # Convert yaw from radians to degrees
@@ -129,6 +129,29 @@ class FlightController:
         """
         self.update_vehicle_state()
         return self.vehicle_state.copy()
+
+    def set_EKF_origin(self):
+        """
+        Set the origin for the extended Kalman filter (EKF). This is the (0,0,0) point for the drone. 
+        Because our drone does not use GPS, this must be set manually when the drone initializes, and cannot be changed afterwards.
+        """
+
+        if not self.connected:
+            return False
+        
+        try:
+            self.connection.mav.set_gps_global_origin_send(
+                self.connection.target_system,
+                0, # latitude in degrees, set to 0 because GPS is not used
+                0, # longitude in degrees, set to 0 because GPS is not used
+                0, # altitude in mm, set to 0 because GPS is not used
+                0, # time stamp in ms, not used
+            )
+            print("[NAV] EKF origin set")
+            return True
+        except Exception as e:
+            print(f"[NAV] Error setting EKF origin: {e}")
+            return False
     
     def set_guided_mode(self):
         """
@@ -179,8 +202,8 @@ class FlightController:
         
         try:
             # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
-            # Type mask: 0b110111000111 = ignore position, use velocity
-            type_mask = 0b110111000111
+            # Type mask: 0b010111000111 = ignore position, use velocity
+            type_mask = int(0b010111000111)
             
             self.connection.mav.set_position_target_local_ned_send(
                 0,  # time_boot_ms (not used)
@@ -191,7 +214,7 @@ class FlightController:
                 0, 0, 0,  # x, y, z (ignored)
                 vx, vy, vz,  # vx, vy, vz
                 0, 0, 0,  # afx, afy, afz (ignored)
-                yaw_rate, 0  # yaw, yaw_rate
+                0, 0  # yaw, yaw_rate 
             )
             return True
             
@@ -199,32 +222,32 @@ class FlightController:
             print(f"[NAV] Error sending velocity command: {e}")
             return False
     
-    def send_position_command(self, lat, lon, alt):
+    def send_absolute_position_command(self, x, y, z):
         """
-        Send position command (waypoint) to flight controller.
+        Send position command (waypoint) to flight controller, relative to the EKF origin
         
         Args:
-            lat: Latitude (degrees)
-            lon: Longitude (degrees)
-            alt: Altitude (meters, relative to home)
+            x: positive is forward, negative is backwards (meters)
+            y: positive is right, negative is left (meters)
+            z: positive is up, negative is down (meters)
         """
         if not self.connected:
             return False
         
         try:
-            # Use SET_POSITION_TARGET_GLOBAL_INT
+            # Use SET_POSITION_TARGET_LOCAL_NED with position commands
             # Type mask: 0b110111111000 = ignore velocity, use position
-            type_mask = 0b110111111000
+            type_mask = int(0b110111111000)
             
-            self.connection.mav.set_position_target_global_int_send(
+            self.connection.mav.set_position_target_local_ned_send(
                 0,  # time_boot_ms
                 self.connection.target_system,
                 self.connection.target_component,
-                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED, # coordinates are relative to the EKF origin 
                 type_mask,
-                int(lat * 1e7),  # latitude in degrees * 1e7
-                int(lon * 1e7),  # longitude in degrees * 1e7
-                alt,  # altitude in meters
+                x,  # position X (+forward/-back) in meters
+                y,  # position Y (+right/-left) in meters
+                z,  # altitude (+up/-down) in meters
                 0, 0, 0,  # velocity (ignored)
                 0, 0, 0,  # acceleration (ignored)
                 0, 0  # yaw, yaw_rate (ignored)
@@ -232,9 +255,113 @@ class FlightController:
             return True
             
         except Exception as e:
-            print(f"[NAV] Error sending position command: {e}")
+            print(f"[NAV] Error sending absolute position command: {e}")
             return False
-    
+
+    def send_relative_position_command(self, x, y, z):
+        """
+        Send position command (waypoint) to flight controller, relative to the drone's current position and rotation
+        
+        Args:
+            x: positive is forward, negative is backwards (meters)
+            y: positive is right, negative is left (meters)
+            z: positive is up, negative is down (meters)
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            # Use SET_POSITION_TARGET_LOCAL_NED with position commands
+            # Type mask: 0b110111111000 = ignore velocity, use position
+            type_mask = int(0b110111111000)
+            
+            self.connection.mav.set_position_target_local_ned_send(
+                0,  # time_boot_ms
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_FRAME_BODY_FRD, # coordinates are relative to drone as it's currently oriented.  
+                type_mask,
+                x,  # position X (+forward/-back) in meters. relative to the body, so +x is directly in front of the drone
+                y,  # position Y (+right/-left) in meters
+                z,  # altitude (+up/-down) in meters
+                0, 0, 0,  # velocity (ignored)
+                0, 0, 0,  # acceleration (ignored)
+                0, 0  # yaw, yaw_rate (ignored)
+            )
+            return True
+            
+        except Exception as e:
+            print(f"[NAV] Error sending relative position command: {e}")
+            return False
+
+    def send_absolute_rotation_command(self, yaw, yaw_rate):
+        """
+        Send absolute rotation command to flight controller.
+        
+        Args:
+            yaw: absolute heading (radians), relative to the EKF origin. 0 is the direction that the drone was facing when it initialized
+            yaw rate: Yaw rate (rad/s, positive = clockwise)
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
+            # Type mask: 0b000111111111  = use yaw & yaw rate, ignore all others
+            type_mask = int(0b000111111111)
+            
+            self.connection.mav.set_position_target_local_ned_send(
+                0,  # time_boot_ms (not used)
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED, # rotation is relative to the EKF origin
+                type_mask,
+                0, 0, 0,  # x, y, z (ignored)
+                vx, vy, vz,  # vx, vy, vz (ignored)
+                0, 0, 0,  # afx, afy, afz (ignored)
+                yaw, # yaw,
+                yaw_rate  # yaw_rate
+            )
+            return True
+            
+        except Exception as e:
+            print(f"[NAV] Error sending absolute rotation command: {e}")
+            return False
+
+    def send_relative_rotation_command(self, yaw, yaw_rate):
+        """
+        Send absolute relative rotation command to flight controller.
+        
+        Args:
+            yaw: new heading (radians), relative to the drone's current heading. 0 is the direction that the drone is currently pointing in.
+            yaw rate: Yaw rate (rad/s, positive = clockwise)
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
+            # Type mask: 0b000111111111 = use yaw & yaw rate, ignore all others
+            type_mask = int(0b000111111111)
+            
+            self.connection.mav.set_position_target_local_ned_send(
+                0,  # time_boot_ms (not used)
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_FRAME_BODY_FRD, # rotation is relative to drone as it's currently oriented.
+                type_mask,
+                0, 0, 0,  # x, y, z (ignored)
+                vx, vy, vz,  # vx, vy, vz (ignored)
+                0, 0, 0,  # afx, afy, afz (ignored)
+                yaw, # yaw,
+                yaw_rate  # yaw_rate
+            )
+            return True
+            
+        except Exception as e:
+            print(f"[NAV] Error sending absolute rotation command: {e}")
+            return False
+
     def arm(self):
         """Arm the vehicle."""
         if not self.connected:
