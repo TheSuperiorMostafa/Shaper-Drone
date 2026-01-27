@@ -72,14 +72,18 @@ class FlightController:
             print("[NAV] Waiting for heartbeat...")
             self.connection.wait_heartbeat(timeout=10)
             
-            self.connected = True
-            print(f"[NAV] Connected! System: {self.connection.target_system}, Component: {self.connection.target_component}")
-            print("[NAV] Flight controller ready for autonomous navigation")
+            if (self.connection.target_system == 0 & self.connection.target_component == 0): 
+                self.connected = False
+                print("[NAV] No Flight controller heartbeat detected. Aborting...")
+                return False
             
-            # Start updating vehicle state
-            self.update_vehicle_state()
-            
-            return True
+            else:
+                print(f"[NAV] Connected! System: {self.connection.target_system}, Component: {self.connection.target_component}")
+                print("[NAV] Flight controller ready for autonomous navigation")
+                self.connected = True
+                # Start updating vehicle state
+                self.update_vehicle_state()
+                return True
             
         except Exception as e:
             print(f"[NAV] Connection failed: {e}")
@@ -187,15 +191,15 @@ class FlightController:
             print(f"[NAV] Error setting GUIDED mode: {e}")
             return False
     
-    def send_velocity_command(self, vx, vy, vz, yaw_rate=0):
+    def send_velocity_command(self, vx, vy, vz):
         """
         Send velocity command to flight controller (for visual servoing).
-        
+        Ardupilot will automatically stop moving the drone after 3 seconds of no input, so this command is kinda useless
+
         Args:
             vx: Forward velocity (m/s, positive = forward)
             vy: Right velocity (m/s, positive = right)
             vz: Down velocity (m/s, positive = down)
-            yaw_rate: Yaw rate (rad/s, positive = clockwise)
         """
         if not self.connected:
             return False
@@ -216,6 +220,8 @@ class FlightController:
                 0, 0, 0,  # afx, afy, afz (ignored)
                 0, 0  # yaw, yaw_rate 
             )
+
+            print(f"[NAV] Sending velocity command. vx: {vx}m/s, vy: {vy}m/s vz: {vz}m/s")
             return True
             
         except Exception as e:
@@ -229,14 +235,14 @@ class FlightController:
         Args:
             x: positive is forward, negative is backwards (meters)
             y: positive is right, negative is left (meters)
-            z: positive is up, negative is down (meters)
+            z: positive is down, negative is up (meters)
         """
         if not self.connected:
             return False
         
         try:
             # Use SET_POSITION_TARGET_LOCAL_NED with position commands
-            # Type mask: 0b110111111000 = ignore velocity, use position
+            # Type mask: 0b110111111000 = use position only
             type_mask = int(0b110111111000)
             
             self.connection.mav.set_position_target_local_ned_send(
@@ -247,11 +253,12 @@ class FlightController:
                 type_mask,
                 x,  # position X (+forward/-back) in meters
                 y,  # position Y (+right/-left) in meters
-                z,  # altitude (+up/-down) in meters
+                z,  # altitude (-up/+down) in meters. 
                 0, 0, 0,  # velocity (ignored)
                 0, 0, 0,  # acceleration (ignored)
                 0, 0  # yaw, yaw_rate (ignored)
             )
+            print(f"[NAV] Sending absolute position command. New position is x: {x}m, y: {y}m z: {z}m (-z is up)")
             return True
             
         except Exception as e:
@@ -260,12 +267,12 @@ class FlightController:
 
     def send_relative_position_command(self, x, y, z):
         """
-        Send position command (waypoint) to flight controller, relative to the drone's current position and rotation
+        Send position command (waypoint) to flight controller, relative to the drone's current position and heading
         
         Args:
             x: positive is forward, negative is backwards (meters)
             y: positive is right, negative is left (meters)
-            z: positive is up, negative is down (meters)
+            z: positive is down, negative is uo (meters)
         """
         if not self.connected:
             return False
@@ -279,87 +286,123 @@ class FlightController:
                 0,  # time_boot_ms
                 self.connection.target_system,
                 self.connection.target_component,
-                mavutil.mavlink.MAV_FRAME_BODY_FRD, # coordinates are relative to drone as it's currently oriented.  
+                mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # coordinates are relative to drone as it's currently oriented.  
                 type_mask,
                 x,  # position X (+forward/-back) in meters. relative to the body, so +x is directly in front of the drone
                 y,  # position Y (+right/-left) in meters
-                z,  # altitude (+up/-down) in meters
+                z,  # altitude (-up/+down) in meters.
                 0, 0, 0,  # velocity (ignored)
                 0, 0, 0,  # acceleration (ignored)
                 0, 0  # yaw, yaw_rate (ignored)
             )
+            print(f"[NAV] Sending relative position command. Position change is x: {x}m, y: {y}m z: {z}m (-z is up)")
             return True
             
         except Exception as e:
             print(f"[NAV] Error sending relative position command: {e}")
             return False
 
-    def send_absolute_rotation_command(self, yaw, yaw_rate):
+    def send_absolute_heading_command(self, heading):
         """
-        Send absolute rotation command to flight controller.
+        Makes the flight controller turn to the given heading. Heading is relative to EKF origin, with positive values being clockwise
         
         Args:
-            yaw: absolute heading (radians), relative to the EKF origin. 0 is the direction that the drone was facing when it initialized
-            yaw rate: Yaw rate (rad/s, positive = clockwise)
+            yaw: absolute heading (degrees), relative to the EKF origin. 0 is the direction that the drone was facing when it initialized
         """
         if not self.connected:
             return False
         
         try:
             # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
-            # Type mask: 0b000111111111  = use yaw & yaw rate, ignore all others
-            type_mask = int(0b000111111111)
+            # Type mask: 0b100111000111  = use yaw, set velocity to 0
+            type_mask = int(0b100111000111)
             
             self.connection.mav.set_position_target_local_ned_send(
                 0,  # time_boot_ms (not used)
                 self.connection.target_system,
                 self.connection.target_component,
-                mavutil.mavlink.MAV_FRAME_LOCAL_NED, # rotation is relative to the EKF origin
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED, # heading is relative to the EKF origin
                 type_mask,
                 0, 0, 0,  # x, y, z (ignored)
-                vx, vy, vz,  # vx, vy, vz (ignored)
+                0, 0, 0,  # vx, vy, vz (ignored)
                 0, 0, 0,  # afx, afy, afz (ignored)
-                yaw, # yaw,
-                yaw_rate  # yaw_rate
+                heading / 57.29578, # heading, from degrees to radians
+                0  # yaw_rate (ignored)
             )
+            print(f"[NAV] Sending absolute heading command. New heading: {heading} degrees")
             return True
             
         except Exception as e:
-            print(f"[NAV] Error sending absolute rotation command: {e}")
+            print(f"[NAV] Error sending absolute heading command: {e}")
             return False
 
-    def send_relative_rotation_command(self, yaw, yaw_rate):
+    def send_relative_heading_command(self, heading):
         """
-        Send absolute relative rotation command to flight controller.
+        Makes the flight controller turn to a new heading, relative to the drone's current heading. positive values are clockwise
         
         Args:
-            yaw: new heading (radians), relative to the drone's current heading. 0 is the direction that the drone is currently pointing in.
-            yaw rate: Yaw rate (rad/s, positive = clockwise)
+            yaw: new heading (degrees), relative to the drone's current heading. 0 is the direction that the drone is currently pointing in.
         """
         if not self.connected:
             return False
         
         try:
             # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
-            # Type mask: 0b000111111111 = use yaw & yaw rate, ignore all others
-            type_mask = int(0b000111111111)
+            # Type mask: 0b100111000111  = use yaw, set velocity to 0
+            type_mask = int(0b100111000111)
             
             self.connection.mav.set_position_target_local_ned_send(
                 0,  # time_boot_ms (not used)
                 self.connection.target_system,
                 self.connection.target_component,
-                mavutil.mavlink.MAV_FRAME_BODY_FRD, # rotation is relative to drone as it's currently oriented.
+                mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # heading is relative to drone as it's currently oriented.
                 type_mask,
                 0, 0, 0,  # x, y, z (ignored)
-                vx, vy, vz,  # vx, vy, vz (ignored)
+                0, 0, 0,  # vx, vy, vz (ignored)
                 0, 0, 0,  # afx, afy, afz (ignored)
-                yaw, # yaw,
-                yaw_rate  # yaw_rate
+                heading / 57.29578, # yaw, from degrees to radians
+                0  # yaw_rate (ignored)
             )
+            print(f"[NAV] Sending relative heading command. Heading change: {heading} degrees")
+            return True
+
+        except Exception as e:
+            print(f"[NAV] Error sending relative heading command: {e}")
+            return False
+
+    def send_yaw_rate_command(self, yaw_rate):
+        """
+        Makes the flight controller yaw continuously. 
+        Ardupilot will automatically stop moving the drone after 3 seconds of no input, so this command is kinda useless
+
+        Args:
+            yaw_rate: rotation rate (degrees/sec). positive is counter clockwise
+        """
+        if not self.connected:
+            return False
+        
+        try:
+            # Use SET_POSITION_TARGET_LOCAL_NED with velocity components
+            # Type mask: 0b010111000111  = use yaw rate, set velocity to 0
+            type_mask = int(0b010111000111)
+            
+            self.connection.mav.set_position_target_local_ned_send(
+                0,  # time_boot_ms (not used)
+                self.connection.target_system,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED, # heading is relative to the EKF origin
+                type_mask,
+                0, 0, 0,  # x, y, z (ignored)
+                0, 0, 0,  # vx, vy, vz (ignored)
+                0, 0, 0,  # afx, afy, afz (ignored)
+                0,        # yaw, (ignored)
+                yaw_rate / 57.29578  # yaw_rate, from degrees/sec to radians/sec 
+            )
+            print(f"[NAV] Sending yaw rate command. Yaw rate: {yaw_rate} degrees/sec")
             return True
             
         except Exception as e:
-            print(f"[NAV] Error sending absolute rotation command: {e}")
+            print(f"[NAV] Error yaw rate command: {e}")
             return False
 
     def arm(self):
@@ -389,7 +432,7 @@ class FlightController:
             return False
     
     def land(self):
-        """Command vehicle to land."""
+        """Command vehicle to land at its current position."""
         if not self.connected:
             return False
         
@@ -433,13 +476,18 @@ class FlightController:
             return False
         
         try:
+            # Update vehicle state
+            self.update_vehicle_state()
+
             # Ensure GUIDED mode
-            if not self.set_guided_mode():
-                print("[NAV] Warning: Could not set GUIDED mode for takeoff")
+            if not self.vehicle_state["mode"] == 4:
+                print("[NAV] Vehicle not in guided mode for takeoff, sending command now...")
+                self.set_guided_mode()
             
-            # Arm the vehicle
-            print("[NAV] Arming vehicle for takeoff...")
-            self.connection.arducopter_arm()
+            # Ensure the vehicle is armed
+            if not self.vehicle_state["armed"] == True:
+                print("[NAV] Vehicle not armed for takeoff, arming now...")
+                self.connection.arducopter_arm()
             
             # Wait for arming confirmation
             timeout = time.time() + 10
@@ -451,7 +499,7 @@ class FlightController:
                 time.sleep(0.1)
             
             if not self.vehicle_state['armed']:
-                print("[NAV] Warning: Vehicle may not be armed")
+                print("[NAV] Warning: Arming timeout, vehicle may not be armed")
             
             # Send takeoff command
             print(f"[NAV] Sending takeoff command to {altitude}m...")
