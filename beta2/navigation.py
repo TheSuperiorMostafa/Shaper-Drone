@@ -17,18 +17,18 @@ class FlightController:
     Optimized for Flywoo GOKU GN745 V3 AIO:
     - STM32F745 processor running ArduPilot
     - 7 UART ports available
-    - Standard baud rate: 57600
+    - Standard baud rate: 115200
     - Can power Raspberry Pi via 5V/2A BEC
     """
     
-    def __init__(self, port='/dev/ttyAMA0', baud=57600):
+    def __init__(self, port='/dev/serial0', baud=115200):
         """
         Initialize flight controller connection.
         
         Args:
-            port: Serial port path (default: /dev/ttyAMA0 for Raspberry Pi GPIO)
+            port: Serial port path (default: /dev/serial0 for Raspberry Pi GPIO)
                   For Flywoo GOKU GN745 V3, connect to any available UART port
-            baud: Baud rate (default: 57600, standard for ArduPilot)
+            baud: Baud rate (default: 115200, standard for ArduPilot)
         """
         self.port = port
         self.baud = baud
@@ -49,7 +49,7 @@ class FlightController:
         For Flywoo GOKU GN745 V3 AIO:
         - Connect Raspberry Pi UART (GPIO 14/15) to any FC UART port
         - Ensure ArduPilot firmware is configured for telemetry on that UART
-        - Default baud rate 57600 is standard
+        - Default baud rate 115200 is standard
         
         Args:
             port: Optional port override
@@ -90,7 +90,7 @@ class FlightController:
             print("[NAV] Check:")
             print("  - UART connection between Pi and FC")
             print("  - ArduPilot SERIALx_PROTOCOL set to 2 (MAVLink)")
-            print("  - Correct baud rate (default: 57600)")
+            print("  - Correct baud rate (default: 115200)")
             print("  - Serial port permissions (may need to add user to dialout group)")
             self.connected = False
             return False
@@ -481,25 +481,11 @@ class FlightController:
 
             # Ensure GUIDED mode
             if not self.vehicle_state["mode"] == 4:
-                print("[NAV] Vehicle not in guided mode for takeoff, sending command now...")
-                self.set_guided_mode()
+                print("[NAV] Vehicle not in guided mode, takeoff may fail!")
             
             # Ensure the vehicle is armed
-            if not self.vehicle_state["armed"] == True:
-                print("[NAV] Vehicle not armed for takeoff, arming now...")
-                self.connection.arducopter_arm()
-            
-            # Wait for arming confirmation
-            timeout = time.time() + 10
-            while time.time() < timeout:
-                self.update_vehicle_state()
-                if self.vehicle_state['armed']:
-                    print("[NAV] Vehicle armed successfully")
-                    break
-                time.sleep(0.1)
-            
-            if not self.vehicle_state['armed']:
-                print("[NAV] Warning: Arming timeout, vehicle may not be armed")
+            if not self.vehicle_state["armed"]:
+                print("[NAV] Vehicle not armed, takeoff may fail!")
             
             # Send takeoff command
             print(f"[NAV] Sending takeoff command to {altitude}m...")
