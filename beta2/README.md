@@ -62,6 +62,7 @@ The remote emergency stop immediately disarms motors (motor kill switch) for saf
 - `shapeVideo.py` - Main program with camera, shape detection, and navigation
 - `navigation.py` - MAVLink flight controller communication (includes takeoff, emergency disarm)
 - `shape_navigator.py` - Navigation state machine with gate navigation and visual servoing
+- `test_hover.py` - Program testing final prototype integration between navigation and flight controller
 - `tof_sensor.py` - Time-of-flight sensor interface
 - `optical_flow.py` - Optical flow sensor interface for position/velocity estimation
 - `remote_control.py` - Remote control server for manual override and emergency stop
