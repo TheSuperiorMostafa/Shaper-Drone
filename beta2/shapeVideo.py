@@ -1,3 +1,4 @@
+# shapeVideo.py
 # Transitioning from static images to video shape detection
 
 import os
@@ -22,8 +23,20 @@ from queue import Queue, Empty
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from navigation import FlightController
 from shape_navigator import ShapeNavigator
-from tof_sensor import TOFSensor
 from remote_control import RemoteControl
+
+try:
+    from tof_sensor import TOFSensor
+except ModuleNotFoundError:
+    class TOFSensor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def is_connected(self):
+            return False
+        def read_distance(self):
+            return None
+        def close(self):
+            pass
 
 # Vision-only mode: skip flight controller connection (for standalone Pi vision testing)
 # Set to True when testing camera/shape detection without FC connected; False when flying.
@@ -46,10 +59,10 @@ DEBUG_DEBOUNCE = False
 # - UDP_TARGET_IP: laptop/viewer IP for unicast (e.g. '10.47.232.91'). Set None for broadcast (may not work on eduroam)
 LOW_RES_STREAM = False  # 640x480 so full order and labels fit on screen
 PROCESS_LATEST_ONLY = True
-PROCESS_EVERY_N_FRAMES = 2  # Process every 2nd frame to reduce CPU load
+PROCESS_EVERY_N_FRAMES = 1  # Process every 2nd frame to reduce CPU load
 ENABLE_HTTP_STREAM = False  # Set False to disable HTTP streaming and reduce lag
 ENABLE_UDP_STREAM = True  # Set True to enable UDP streaming
-UDP_TARGET_IP = '10.47.14.1'  # Set to your laptop IP (e.g. '10.47.232.91') for unicast; None = broadcast
+UDP_TARGET_IP = '10.47.104.64'  # Set to your laptop IP (e.g. '10.47.232.91') for unicast; None = broadcast
 
 # Try to import picamera2 for Raspberry Pi camera
 try:
@@ -201,6 +214,7 @@ def frame_capture_thread(camera, use_picamera, raw_frame_queue, shutdown_event):
                 frame = camera.capture_array()
                 # picamera2 returns RGB, convert to BGR for OpenCV
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
             else:
                 ret, frame = camera.read()
                 if not ret:
@@ -360,7 +374,8 @@ def classify(contour, min_area=800):
     elif n == 4:
         _, _, w, h = cv2.boundingRect(approx)
         ar = w / float(h)
-        return "Square" if 0.9 < ar < 1.1 else "Rectangle"
+        if 0.9 < ar < 1.1:
+            return "Square"
     elif n == 5:
         # For a "real" pentagon we expect something not crazy skinny (closer to a square)
         # Aspect ratio (ar) and circularity checks added so long skinny shapes aren't detected
@@ -657,7 +672,7 @@ def run_video():
             print("[INFO] To connect:")
             print("  1. Wire Pi UART (GPIO 14 TX, GPIO 15 RX) to FC UART")
             print("  2. Configure ArduPilot SERIALx_PROTOCOL = 2 (MAVLink)")
-            print("  3. Ensure correct baud rate (57600)")
+            print("  3. Ensure correct baud rate (115200)")
 
     navigation_active = False
     navigation_started = False
@@ -776,11 +791,11 @@ def run_video():
             cv2.putText(annotated, status_text, (20, 90),
                         cv2.FONT_HERSHEY_DUPLEX, 0.6, (255, 0, 0), 2)
         
-        # Display ToF distance
-        if distance is not None:
-            dist_text = f"Distance: {distance:.2f}m"
-            cv2.putText(annotated, dist_text, (20, 120),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
+        # Display ToF distance (commented out since ToF is disabled)
+        # if distance is not None:
+        #     dist_text = f"Distance: {distance:.2f}m"
+        #     cv2.putText(annotated, dist_text, (20, 120),
+        #                 cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 255, 255), 2)
             
             # Highlight target shape if detected
         if navigation_active:
